@@ -9,6 +9,16 @@ runs/
 wandb/
 wandb*
 
+# Generated presentation outputs (rebuild with marp)
+presentation/presentation.pdf
+presentation/presentation.html
+
+# Generated PDF renders
+ITERATION_LOG.pdf
+
+# wandb screenshots (personal)
+analysis/wandb_*.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

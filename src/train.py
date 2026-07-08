@@ -20,19 +20,23 @@ from tqdm import tqdm
 
 from src.dataloaders.dataset import create_dataloaders
 from src.models.baseline import Baseline
+from src.models.transfer import TransferResNet50, FineTuneResNet50
 
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # All hyperparameters in one place for clarity and wandb tracking.
+# Change "model" to switch between architectures.
 
 CONFIG = {
-    "model": "baseline_cnn",
+    "model": "resnet50_finetune",   # "baseline_cnn", "resnet50_frozen", or "resnet50_finetune"
     "num_classes": 120,
     "image_size": 224,
     "batch_size": 32,
-    "epochs": 20,
-    "learning_rate": 1e-3,
-    "optimizer": "adam",
+    "epochs": 30,
+    "learning_rate": 1e-3,          # head LR
+    "lr_backbone": 1e-5,            # backbone (layer4) LR — only used for resnet50_finetune
+    "optimizer": "adamw",           # "adam" or "adamw"
+    "weight_decay": 1e-4,           # L2 regularization — only used with adamw
     "val_split": 0.2,
     "seed": 42,
 }
@@ -64,7 +68,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, device):
         images, labels = images.to(device), labels.to(device)
 
         optimizer.zero_grad()
-        outputs = model(images)
+        outputs = model(images) ## investigar, entendre i com es pot transformar
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -120,7 +124,7 @@ def main():
     wandb.init(
         project="dog-breed-identification",
         config=CONFIG,
-        tags=["baseline", "phase2"],
+        tags=[CONFIG["model"], "phase3"],
     )
 
     # ─── Data ───────────────────────────────────────────────────────────
@@ -134,15 +138,42 @@ def main():
     )
 
     # ─── Model ──────────────────────────────────────────────────────────
-    model = Baseline(num_classes=CONFIG["num_classes"]).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
+    if CONFIG["model"] == "resnet50_finetune":
+        model = FineTuneResNet50(num_classes=CONFIG["num_classes"]).to(device)
+        # Differential LR: layer4 gets lr_backbone, head gets learning_rate
+        param_groups = model.get_param_groups(
+            lr_backbone=CONFIG["lr_backbone"],
+            lr_head=CONFIG["learning_rate"],
+        )
+    elif CONFIG["model"] == "resnet50_frozen":
+        model = TransferResNet50(num_classes=CONFIG["num_classes"]).to(device)
+        param_groups = model.trainable_params()
+    else:
+        model = Baseline(num_classes=CONFIG["num_classes"]).to(device)
+        param_groups = model.parameters()
+
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+    if CONFIG["optimizer"] == "adamw":
+        optimizer = torch.optim.AdamW(
+            param_groups,
+            lr=CONFIG["learning_rate"],
+            weight_decay=CONFIG["weight_decay"],
+        )
+    else:
+        optimizer = torch.optim.Adam(param_groups, lr=CONFIG["learning_rate"])
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=CONFIG["epochs"]
+    )
 
     # Tell wandb to track gradients and parameters (useful for debugging)
     wandb.watch(model, criterion, log="all", log_freq=50)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {total_params:,}")
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
 
     # ─── Training loop ──────────────────────────────────────────────────
     best_val_acc = 0.0
@@ -157,6 +188,8 @@ def main():
         )
         val_loss, val_acc = validate(model, val_loader, criterion, device)
 
+        scheduler.step()
+
         # Log metrics to wandb
         wandb.log({
             "epoch": epoch,
@@ -164,6 +197,7 @@ def main():
             "train/accuracy": train_acc,
             "val/loss": val_loss,
             "val/accuracy": val_acc,
+            "lr": scheduler.get_last_lr()[0],
         })
 
         print(f"  Train — loss: {train_loss:.4f}, acc: {train_acc:.4f}")
@@ -172,7 +206,7 @@ def main():
         # Save best model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            checkpoint_path = checkpoint_dir / "best_baseline.pth"
+            checkpoint_path = checkpoint_dir / f"best_{CONFIG['model']}.pth"
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),

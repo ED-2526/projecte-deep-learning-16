@@ -6,11 +6,11 @@ class Baseline(nn.Module):
     def __init__(self, num_classes):
         super(Baseline, self).__init__()
 
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
-        self.relu1 = nn.ReLU()
-        self.maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1) # Detecta patrons
+        self.relu1 = nn.ReLU() # Funciói activació, valors negatius a 0
+        self.maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2) # Redueix la mida de l'imatge a la meitat, guarda activacions més fortes
 
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1) # Detecta patrons més complexos (sortida conv1 --> entrada 16 canals)
         self.relu2 = nn.ReLU()
         self.maxpool2 = nn.AdaptiveAvgPool2d(1)
 
